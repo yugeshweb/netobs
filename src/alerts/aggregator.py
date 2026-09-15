@@ -21,8 +21,12 @@ def incident_key(alert):
     if alert.threat_class == "ddos":
         return (alert.threat_class, alert.dst or "", str(
             alert.evidence.get("target_port", "")))
-    if alert.threat_class in ("exfiltration", "c2_beacon", "dns_tunnel",
-                              "encrypted_malware"):
+    if alert.threat_class == "encrypted_malware":
+        # Key on the client fingerprint, not the destination: one unknown
+        # client contacting many hosts is a single finding, not many.
+        fp = alert.evidence.get("ja4") or "no-fingerprint"
+        return (alert.threat_class, alert.src, fp)
+    if alert.threat_class in ("exfiltration", "c2_beacon", "dns_tunnel"):
         return (alert.threat_class, alert.src, alert.dst or "")
     if alert.threat_class == "dga_domain":
         return (alert.threat_class, alert.src, alert.evidence.get("domain", ""))
