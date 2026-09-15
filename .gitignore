@@ -1,0 +1,6 @@
+venv/
+data/raw/
+data/processed/
+*.pcap
+*.log
+__pycache__/
