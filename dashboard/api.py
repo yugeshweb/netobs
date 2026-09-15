@@ -90,8 +90,17 @@ def incidents(status: str = "", severity: str = "",
     args.append(limit)
 
     rows = _decode(query(sql, args))
-    rows.sort(key=lambda r: (SEVERITY_ORDER.get(r["severity"], 9),
-                             -r["last_seen"]))
+    def rank(r):
+        # Severity first, then how much evidence supports it: a three-hour
+        # incident seen 178 times outranks a single observation of equal
+        # severity. Recency breaks remaining ties.
+        weight = r["count"] + (r["last_seen"] - r["first_seen"]) / 60.0
+        return (SEVERITY_ORDER.get(r["severity"], 9),
+                r["status"] != "open",
+                -weight,
+                -r["last_seen"])
+
+    rows.sort(key=rank)
     return rows
 
 

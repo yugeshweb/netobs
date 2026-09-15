@@ -28,8 +28,6 @@ def incident_key(alert):
         return (alert.threat_class, alert.src, fp)
     if alert.threat_class in ("exfiltration", "c2_beacon", "dns_tunnel"):
         return (alert.threat_class, alert.src, alert.dst or "")
-    if alert.threat_class == "dga_domain":
-        return (alert.threat_class, alert.src, alert.evidence.get("domain", ""))
     return (alert.threat_class, alert.src, "")
 
 
@@ -76,6 +74,7 @@ class IncidentAggregator:
         self.confidence_jump = confidence_jump
         self.open = {}
         self.closed = []
+        self._by_key = {}
         self._last_emit = {}
         self.now = 0.0
 
@@ -92,6 +91,23 @@ class IncidentAggregator:
         inc = self.open.get(key)
 
         if inc is None:
+            prior = self._by_key.get(key)
+            if prior is not None and prior.status == "closed":
+                # Same situation resuming after a quiet period: reopen and
+                # keep the history rather than restarting the count.
+                prior.status = "open"
+                prior.last_seen = alert.ts
+                prior.count += 1
+                dom = alert.evidence.get("domain")
+                if dom:
+                    seen = prior.peak_evidence.setdefault("domains", [])
+                    if dom not in seen:
+                        seen.append(dom)
+                self.open[key] = prior
+                if prior in self.closed:
+                    self.closed.remove(prior)
+                self._last_emit[key] = alert.ts
+                return "update", prior
             inc = Incident(
                 key=key, threat_class=alert.threat_class,
                 src=alert.src, dst=alert.dst,
@@ -105,12 +121,21 @@ class IncidentAggregator:
             band = alert.evidence.get("band")
             if band:
                 inc.bands[band] = 1
+            dom = alert.evidence.get("domain")
+            if dom:
+                inc.peak_evidence["domains"] = [dom]
             self.open[key] = inc
+            self._by_key[key] = inc
             self._last_emit[key] = alert.ts
             return "new", inc
 
         inc.count += 1
         inc.last_seen = alert.ts
+        dom = alert.evidence.get("domain")
+        if dom:
+            seen = inc.peak_evidence.setdefault("domains", [])
+            if dom not in seen:
+                seen.append(dom)
         inc.last_confidence = alert.confidence
         inc.evidence = dict(alert.evidence)
         band = alert.evidence.get("band")
