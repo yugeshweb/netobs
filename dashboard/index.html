@@ -181,16 +181,30 @@ function App() {
 
   useEffect(() => {
     load();
+    let sock = null, timer = null, dead = false;
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const sock = new WebSocket(`${proto}://${location.host}/ws`);
-    sock.onopen = () => setLive(true);
-    sock.onclose = () => setLive(false);
-    sock.onmessage = e => {
-      const m = JSON.parse(e.data);
-      if (m.summary) setSum(m.summary);
-      if (m.incidents) setIncs(m.incidents);
+
+    const connect = () => {
+      if (dead) return;
+      sock = new WebSocket(`${proto}://${location.host}/ws`);
+      sock.onopen = () => setLive(true);
+      sock.onmessage = e => {
+        const m = JSON.parse(e.data);
+        if (m.summary) setSum(m.summary);
+        if (m.incidents) {
+          setIncs(m.incidents);
+          setSel(cur => cur || m.incidents[0] || null);
+        }
+      };
+      sock.onclose = () => {
+        setLive(false);
+        if (!dead) timer = setTimeout(connect, 2000);   // keep trying
+      };
+      sock.onerror = () => sock.close();
     };
-    return () => sock.close();
+
+    connect();
+    return () => { dead = true; clearTimeout(timer); if (sock) sock.close(); };
   }, []);
 
   const classes = [...new Set(incs.map(i => i.threat_class))];

@@ -145,7 +145,12 @@ class IncidentAggregator:
         jumped = alert.confidence >= inc.peak_confidence + self.confidence_jump
         if alert.confidence > inc.peak_confidence:
             inc.peak_confidence = alert.confidence
+            carried = inc.peak_evidence.get("domains")
             inc.peak_evidence = dict(alert.evidence)
+            inc.peak_evidence.pop("domain", None)
+            inc.peak_evidence.pop("queried", None)
+            if carried:
+                inc.peak_evidence["domains"] = carried
             inc.severity = severity_for(inc.peak_confidence)
 
         due = alert.ts - self._last_emit.get(key, 0.0) >= self.update_every
