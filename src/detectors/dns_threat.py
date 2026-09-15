@@ -171,10 +171,12 @@ class DNSDetector:
         self.tun_fired[(src, top_parent)] = self.now
 
         rate = n / self.span
-        vol = min(1.0, rate / 5.0)
-        length = min(1.0, mean_len / 60.0)
-        confidence = (0.3 * vol + 0.3 * length + 0.2 * min(1.0, ent / 4.5)
-                      + 0.2 * unique_share)
+        # Sustained volume to one domain matters more than raw speed: a slow
+        # tunnel is evasive, not benign. Scale against the alerting floor.
+        vol = min(1.0, n / (self.tun_min_queries * 2.0))
+        length = min(1.0, mean_len / 45.0)
+        confidence = (0.25 * vol + 0.30 * length + 0.20 * min(1.0, ent / 4.5)
+                      + 0.15 * unique_share + 0.10 * hi_share)
 
         return Alert(
             ts=self.now, threat_class=TUN_NAME, src=src, dst=top_parent,
