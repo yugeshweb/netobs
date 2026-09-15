@@ -54,10 +54,26 @@ def main():
     print(f"{len(X)} sessions from {len(caps)} captures")
     print(f"  benign={int((y==0).sum())} malicious={int((y==1).sum())}\n")
 
-    # Hold out every third capture of each class.
-    ben = [c for c in caps if c.startswith("CTU-Normal")]
-    mal = [c for c in caps if not c.startswith("CTU-Normal")]
-    test_caps = set(ben[::3] + mal[::3])
+    # Hold out captures by size, not position: tiny captures make a
+    # meaningless test set. Keep roughly a third of each class's sessions.
+    from collections import Counter
+    sizes = Counter(groups)
+    ben = sorted([c for c in caps if c.startswith("CTU-Normal")],
+                 key=lambda c: -sizes[c])
+    mal = sorted([c for c in caps if not c.startswith("CTU-Normal")],
+                 key=lambda c: -sizes[c])
+
+    def pick(names, share=0.33):
+        total = sum(sizes[c] for c in names)
+        want, got, out = total * share, 0, []
+        for c in names[1::2]:          # skip the largest, take alternates
+            out.append(c); got += sizes[c]
+            if got >= want:
+                break
+        return out
+
+    test_caps = set(pick(ben) + pick(mal))
+    print("capture sizes:", {c: sizes[c] for c in mal})
     print("held-out captures:", sorted(test_caps), "\n")
 
     te = np.isin(groups, list(test_caps))
