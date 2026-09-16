@@ -178,7 +178,7 @@ def run(args):
     kinds = sorted({k for _, k, _ in records})
 
     LIVE.mkdir(parents=True, exist_ok=True)
-    for f in LIVE.glob("*.log"):
+    for f in list(LIVE.glob("*.log")) + list(LIVE.glob("*.done")):
         f.unlink()
 
     # byte offset of the end of each record, per log, so a /proc read
@@ -257,6 +257,12 @@ def run(args):
     feed_wall = time.time() - feed_start
     for h in handles.values():
         h.close()
+    # Tell the pipeline the feed is over instead of making it wait out a
+    # timeout to infer it. Written after every handle is closed, so the marker
+    # only appears once the data is on disk. Without this the tail sits in the
+    # measurement as dead time that has nothing to do with throughput.
+    for k in kinds:
+        (LIVE / f"{k}.done").write_text("")
 
     # -- wait for the pipeline to drain -----------------------------------
     if proc is None:
@@ -318,9 +324,20 @@ def report(args, records, kinds, trace, feed_wall, processed, tail):
 
     # In saturate mode the feeder is not the limiter, so the time taken to
     # get through everything is the pipeline's capacity outright.
+    #
+    # The sampler reads the pipeline's file position from /proc, so it can
+    # only observe completion while the process is still alive. That used to
+    # be free: the pipeline sat out an idle timeout at the end and there were
+    # seconds of samples showing read == total. Now the .done markers let it
+    # exit as soon as it has finished, and the last sample can land before the
+    # final records are counted -- which reported capacity as 0 rather than as
+    # unmeasured. Fall back to the last observation when the run is known to
+    # have processed everything.
     capacity = 0.0
     if first_read is not None:
         done_t = next((s["t"] for s in trace if s["read"] >= total), None)
+        if done_t is None and processed is not None and processed >= total and trace:
+            done_t = trace[-1]["t"]
         if done_t and done_t > first_read:
             capacity = total / (done_t - first_read)
 

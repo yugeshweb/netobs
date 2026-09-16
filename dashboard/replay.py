@@ -18,26 +18,27 @@ CAPTURES = ROOT / "data" / "raw"
 STAGE = ROOT / "data" / "replay" / "staged"
 LIVE = ROOT / "data" / "replay" / "live"
 PIPELINE_LOG = ROOT / "data" / "replay" / "pipeline.log"
+FEED_TRACE = ROOT / "data" / "replay" / "feed_trace.jsonl"
 KINDS = ("conn.log", "dns.log", "ssl.log")
 
-# Two facts about the pipeline constrain the hand-off.
-#
-# merged() only opens logs that exist when it starts, and then follows each
-# one with its own generator. So every log the capture will produce has to
-# exist before the pipeline is spawned -- but a log that stays empty forever
-# is worse than absent, because merged() blocks on it while priming the heap
-# and nothing is processed until it times out. Create exactly the logs that
+# One fact about the pipeline still constrains the hand-off: merged() only
+# opens logs that exist when it starts, so every log the capture will produce
+# has to exist before the pipeline is spawned. Create exactly the logs that
 # have records, no more.
 #
-# And follow() gives up after idle_timeout seconds without a new line. That
-# is measured per log, so the timeout has to outlast the longest quiet
-# stretch any single log will see -- including the wait for its first record.
-# ssl.log in the Neris capture has a 2390s internal gap, which at 60x is 40s
-# of silence; too short a timeout there drops every later TLS session without
-# saying so.
-MIN_IDLE = 20.0
-MAX_IDLE = 600.0
-IDLE_MARGIN = 15.0
+# What used to constrain it and no longer does: follow() gave up after
+# idle_timeout seconds of silence, measured per log, and merged() blocked on
+# each log in turn. So the timeout had to outlast the longest quiet stretch
+# any single log would see -- ssl.log in Neris has a 2390s internal gap, 40s
+# of silence at 60x -- and paying that per log at the end cost ~165s of drain
+# on a 204s replay. Now the feeder says outright when a log is finished by
+# dropping a `<log>.done` marker beside it, and a quiet log no longer holds up
+# the others, so neither the gap-sized timeout nor the drain is needed.
+#
+# QUIET_TIMEOUT is only the fallback for a log whose marker never arrives,
+# which for a replay means the feeder was killed.
+LAG = 0.5
+QUIET_TIMEOUT = 15.0
 
 
 def list_captures():
@@ -76,7 +77,7 @@ class Replay:
         self.state["running"] = False
         self.state["phase"] = "stopped"
 
-    def start(self, pcap, speed=60.0):
+    def start(self, pcap, speed=60.0, trace=False):
         if self.state["running"]:
             return {"error": "a replay is already running"}
         pcap = (ROOT / pcap).resolve()
@@ -88,7 +89,7 @@ class Replay:
                            "speed": speed, "records": 0, "total": 0,
                            "phase": "converting", "pipeline": None,
                            "idle_timeout": None})
-        self.thread = threading.Thread(target=self._run, args=(pcap, speed),
+        self.thread = threading.Thread(target=self._run, args=(pcap, speed, trace),
                                        daemon=True)
         self.thread.start()
         return {"ok": True, "capture": pcap.name, "speed": speed}
@@ -105,14 +106,15 @@ class Replay:
         except subprocess.TimeoutExpired:
             p.kill()
 
-    def _start_pipeline(self, idle_timeout):
+    def _start_pipeline(self):
         """Spawn the detection pipeline against the live log directory."""
         PIPELINE_LOG.parent.mkdir(parents=True, exist_ok=True)
         self._log = PIPELINE_LOG.open("w")
         self.proc = subprocess.Popen(
             [sys.executable, "-u", "src/pipeline.py",
              "--logdir", str(LIVE.relative_to(ROOT)),
-             "--quiet", "--idle-timeout", f"{idle_timeout:.0f}"],
+             "--quiet", "--lag", f"{LAG}",
+             "--quiet-timeout", f"{QUIET_TIMEOUT}"],
             cwd=str(ROOT), stdout=self._log, stderr=subprocess.STDOUT)
         self.state["pipeline"] = "running"
 
@@ -131,11 +133,12 @@ class Replay:
 
     # -- the replay itself -------------------------------------------------
 
-    def _run(self, pcap, speed):
+    def _run(self, pcap, speed, trace=False):
         try:
             STAGE.mkdir(parents=True, exist_ok=True)
             LIVE.mkdir(parents=True, exist_ok=True)
-            for f in list(STAGE.glob("*.log")) + list(LIVE.glob("*.log")):
+            for f in (list(STAGE.glob("*.log")) + list(LIVE.glob("*.log"))
+                      + list(LIVE.glob("*.done"))):
                 f.unlink()
 
             # Same invocation as scripts/run_zeek.sh: -C because WSL checksum
@@ -197,23 +200,25 @@ class Replay:
             spd = max(speed, 0.001)
             t0 = records[0][0]
             kinds = [k for k in KINDS if stamps.get(k)]
-
-            # The longest any one follow() will sit without a line: the wait
-            # for that log's first record, or its widest internal gap.
-            worst = 0.0
-            for k in kinds:
-                ts = sorted(stamps[k])
-                waits = [ts[0] - t0] + [b - a for a, b in zip(ts, ts[1:])]
-                worst = max(worst, max(waits))
-            idle_timeout = min(MAX_IDLE,
-                               max(MIN_IDLE, worst / spd + IDLE_MARGIN))
-            self.state["idle_timeout"] = round(idle_timeout, 1)
+            self.state["idle_timeout"] = QUIET_TIMEOUT
 
             # Creating them here is what lets the pipeline find every log when
             # it starts a moment from now. follow() reads from the beginning,
             # so nothing written during its startup is missed.
             handles = {k: (LIVE / k).open("a") for k in kinds}
-            self._start_pipeline(idle_timeout)
+
+            # Latency has to be measured against when the sensor emitted each
+            # record, and here the feeder is the sensor. Reconstructing that
+            # afterwards from (wall0, t0, speed) does not work: pacing is on
+            # `ts + duration` and Neris has connections lasting 11,653 s, so at
+            # 300x the reconstruction is off by ~38 s — larger than the effect
+            # being measured. Record the wall clock at the moment of the write
+            # instead. Off by default; it is an instrument, not part of a run.
+            tr = FEED_TRACE.open("w") if trace else None
+            if tr is None and FEED_TRACE.exists():
+                FEED_TRACE.unlink()   # never leave a stale trace to be joined
+
+            self._start_pipeline()
 
             self.state["phase"] = "replaying"
             wall0 = time.time()
@@ -231,19 +236,37 @@ class Replay:
                     time.sleep(min(behind, 0.25))
                 handles[kind].write(line + "\n")
                 handles[kind].flush()
+                if tr is not None:
+                    # The record's own ts, not the pacing key: this has to join
+                    # against alert.ts, which detectors read from the record.
+                    rec_ts = ts
+                    try:
+                        rec_ts = float(json.loads(line).get("ts", ts))
+                    except (ValueError, TypeError, AttributeError):
+                        pass
+                    tr.write(json.dumps({"kind": kind.replace(".log", ""),
+                                         "ts": rec_ts,
+                                         "w": time.time()}) + "\n")
                 self.state["records"] = i + 1
 
             for h in handles.values():
                 h.close()
+            if tr is not None:
+                tr.close()
             if self.stop_flag.is_set():
                 return
 
-            # Let the pipeline idle out by itself rather than killing it: the
-            # final incident states are only written after merged() returns.
-            # merged() waits out idle_timeout on each log in turn before it
-            # returns, so the tail is per-log, not shared.
+            # Say so, rather than letting the pipeline infer it from silence.
+            # Written only after every handle is closed and flushed, so the
+            # marker appearing means the data is already on disk. This is what
+            # turns the old ~165s drain into a couple of seconds.
+            for k in kinds:
+                (LIVE / f"{k}.done").write_text("")
+
+            # Still wait rather than kill: the final incident states are only
+            # written after merged() returns, and killing skips the flush.
             self.state["phase"] = "draining"
-            self._await_pipeline(len(kinds) * idle_timeout + 30.0)
+            self._await_pipeline(QUIET_TIMEOUT + 30.0)
             self.state["phase"] = "finished"
         except subprocess.SubprocessError as e:
             self.state["phase"] = f"error: {e}"

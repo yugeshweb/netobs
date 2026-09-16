@@ -8,14 +8,13 @@ Read-only by construction: the only inputs are log files another process
 writes. Nothing here can contact, probe or block anything on the network.
 """
 import argparse
-import heapq
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from ingest.log_stream import follow
+from ingest.log_stream import follow, IDLE
 from features.window import SlidingWindow, FlowRecord
 from features.compute import features_for
 from detectors.port_scan import PortScanDetector
@@ -28,29 +27,84 @@ from alerts.aggregator import IncidentAggregator, incident_key
 from alerts.store import AlertStore
 
 
-def merged(paths, idle_timeout):
-    """Yield (kind, record) from several logs, ordered by timestamp."""
-    gens = {}
+def merged(paths, lag=0.5, quiet_timeout=10.0, poll=0.05):
+    """Yield (kind, record) from several logs, ordered by timestamp.
+
+    A k-way merge can only guarantee timestamp order while every input has a
+    record waiting: until a log speaks, there is no way to know whether its
+    next record belongs before the ones already in hand. The old version took
+    that literally and blocked on each log in turn, so a single quiet log
+    stopped the pipeline for a whole timeout while the others sat unread.
+
+    This version bounds the wait instead. A silent log gets `lag` seconds to
+    speak; past that its siblings are released and it rejoins the ordering
+    whenever it next produces something. Latency is therefore bounded by `lag`
+    rather than by the timeout that decides a log is finished — those are now
+    two different numbers, which is the whole point.
+
+    What that costs: strict cross-log ordering, but only while a log is quiet.
+    It is safe here because the three kinds drive disjoint detector state —
+    conn feeds the window, DDoS, beaconing, scanning and exfiltration; dns
+    only DNSDetector; ssl only EncryptedThreatDetector. No detector reads
+    another kind's records, so interleaving cannot change which alerts fire,
+    only the order they reach the audit trail.
+
+    A log ends when its `<log>.done` marker appears and it has been read out,
+    or after `quiet_timeout` without a line for a sensor that offers no
+    marker. Either way one log ending no longer holds up the rest.
+    """
+    # No per-log idle timeout. A log going quiet must never be what ends it:
+    # ssl.log in Neris has a 2390s internal gap, 40s of wall silence at 60x,
+    # and any per-log timeout shorter than that silently drops every later TLS
+    # session. The marker decides when a log is finished; quiet_timeout below
+    # is a single global fallback for when nothing arrives on *any* log.
+    gens, pending, quiet_since = {}, {}, {}
     for kind, p in paths.items():
         if Path(p).exists():
-            gens[kind] = follow(p, idle_timeout=idle_timeout)
+            gens[kind] = follow(p, block=False, done_marker=True)
 
-    heap = []
-    for kind, g in gens.items():
-        try:
-            rec = next(g)
-            heapq.heappush(heap, (float(rec.get("ts", 0.0) or 0.0), kind, rec))
-        except StopIteration:
-            pass
+    last_record = time.time()
+    while gens or pending:
+        now = time.time()
 
-    while heap:
-        ts, kind, rec = heapq.heappop(heap)
-        yield kind, rec
-        try:
-            nxt = next(gens[kind])
-            heapq.heappush(heap, (float(nxt.get("ts", 0.0) or 0.0), kind, nxt))
-        except StopIteration:
-            pass
+        # Top up every log that has no record in hand. Each of these is one
+        # readline; none of them can block.
+        for kind in list(gens):
+            if kind in pending:
+                continue
+            try:
+                rec = next(gens[kind])
+            except StopIteration:
+                del gens[kind]
+                quiet_since.pop(kind, None)
+                continue
+            if rec is IDLE:
+                quiet_since.setdefault(kind, now)
+            else:
+                pending[kind] = rec
+                quiet_since.pop(kind, None)
+                last_record = now
+
+        if not pending:
+            if not gens:
+                return
+            if time.time() - last_record >= quiet_timeout:
+                return
+            time.sleep(poll)
+            continue
+
+        # Hold back only while a log that owes us a record might still be
+        # about to produce one. Once every silent log has been silent for
+        # `lag`, go without them.
+        waiting = [k for k in gens if k not in pending]
+        if waiting:
+            newest_silence = max(quiet_since.get(k, now) for k in waiting)
+            if now - newest_silence < lag:
+                time.sleep(poll)
+                continue
+
+        kind = min(pending, key=lambda k: float(pending[k].get("ts", 0.0) or 0.0))
+        yield kind, pending.pop(kind)
 
 
 class Pipeline:
@@ -148,15 +202,19 @@ class Pipeline:
         if a:
             self._emit(a)
 
-    def run(self, idle_timeout=5.0):
+    def run(self, lag=0.5, quiet_timeout=10.0):
         paths = {"conn": self.logdir / "conn.log",
                  "dns": self.logdir / "dns.log",
                  "ssl": self.logdir / "ssl.log"}
         handlers = {"conn": self.on_conn, "dns": self.on_dns, "ssl": self.on_ssl}
 
         start = time.time()
-        for kind, rec in merged(paths, idle_timeout):
+        first_read = last_read = None
+        for kind, rec in merged(paths, lag=lag, quiet_timeout=quiet_timeout):
+            if first_read is None:
+                first_read = time.time()
             handlers[kind](rec)
+            last_read = time.time()
 
         # Close only what genuinely went quiet; leave the rest open so the
         # dashboard can distinguish active incidents from resolved ones.
@@ -165,7 +223,13 @@ class Pipeline:
             self.store.upsert_incident(inc)
         self.store.flush()
 
-        elapsed = time.time() - start - idle_timeout
+        # From the first record to the last, not wall time minus a timeout.
+        # The old form subtracted exactly one idle_timeout while merged()
+        # waited out one per log, which is why the same run over the same data
+        # reported 5,807, 3,152 and 1,602 records/s at three different
+        # timeouts. Measuring the working interval removes the knob from the
+        # answer: the startup wait and the final quiet wait are not work.
+        elapsed = (last_read - first_read) if first_read and last_read else 0.0
         return elapsed, start
 
 
@@ -175,15 +239,27 @@ def main():
     p.add_argument("--models", default="data/models")
     p.add_argument("--db", default="data/alerts.db")
     p.add_argument("--span", type=float, default=300.0)
-    p.add_argument("--idle-timeout", type=float, default=5.0)
+    p.add_argument("--lag", type=float, default=0.5,
+                   help="how long a quiet log may hold up its siblings; this "
+                        "is the latency bound")
+    p.add_argument("--quiet-timeout", type=float, default=10.0,
+                   help="silence after which a log with no .done marker is "
+                        "treated as finished")
+    p.add_argument("--idle-timeout", type=float, default=None,
+                   help="deprecated alias for --quiet-timeout")
     p.add_argument("--keep-db", action="store_true")
     p.add_argument("--quiet", action="store_true")
     a = p.parse_args()
 
+    # --idle-timeout used to mean both "wait this long before giving up on a
+    # log" and, as a side effect, "stall everything for this long". It now
+    # only means the first, so it maps onto --quiet-timeout.
+    quiet_timeout = a.idle_timeout if a.idle_timeout is not None else a.quiet_timeout
+
     pipe = Pipeline(a.logdir, a.models, a.db, span=a.span,
                     reset_db=not a.keep_db, quiet=a.quiet)
     print(f"reading {a.logdir}\n")
-    elapsed, _ = pipe.run(idle_timeout=a.idle_timeout)
+    elapsed, _ = pipe.run(lag=a.lag, quiet_timeout=quiet_timeout)
 
     total = sum(pipe.counts.values())
     print(f"\nrecords: {pipe.counts}  total={total}")

@@ -186,17 +186,17 @@ run over the same data reports:
 | 10 | 1,602 rec/s |
 
 Identical work. The ~2,950 rec/s that used to be quoted in CLAUDE.md came
-from this and understated the pipeline by roughly 3×. Nothing here uses the
-pipeline's self-report.
+from this and understated the pipeline by roughly 3×.
 
-**A quiet log stalls the whole pipeline.** Because `merged()` advances one
-generator at a time, exhausting a sparse log blocks everything for a whole
-`idle_timeout` while nothing is processed. Measured on Neris: 20.0 s of dead
-time at `--idle-timeout 10`, 1.5 s at 1 — exactly (logs − 1) × idle_timeout.
-In a paced replay it shows up as a flat spot: the pipeline froze for 10 s at
-`ssl.log`'s exhaustion, then burst through 11,259 records catching up.
-Correctness is unaffected, since the records are still in the file, but
-detection latency is not. Phase 8 item 2 should measure that directly.
+**Both artifacts are now fixed** (finding #13). `merged()` no longer blocks on
+a quiet log — it holds one record per log and releases a silent log's siblings
+after `lag` seconds instead of waiting on it — and a log ends when its
+`<log>.done` marker appears rather than after an idle timeout. `elapsed` is now
+the first-record-to-last-record interval, so the timeout is out of the answer.
+The throughput harness confirms it: `stalled_s` is ~0 where it used to be
+20 s, and capacity comes out ~10,900 rec/s consistently instead of moving with
+`--idle-timeout`. The stall's other cost, detection latency, is measured
+directly in `docs/latency.md`: p99 57.1 s before, 0.68 s after.
 
 ## 8. Reproducing
 

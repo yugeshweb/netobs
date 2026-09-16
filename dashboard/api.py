@@ -159,8 +159,10 @@ def replay_status():
 
 
 @app.post("/api/replay/start")
-def replay_start(pcap: str, speed: float = 60.0):
-    return REPLAY.start(pcap, speed)
+def replay_start(pcap: str, speed: float = 60.0, trace: bool = False):
+    # trace=1 makes the feeder record when it wrote each record, which is what
+    # scripts/latency.py joins alerts against. Off for a normal demo run.
+    return REPLAY.start(pcap, speed, trace=trace)
 
 
 @app.post("/api/replay/stop")
