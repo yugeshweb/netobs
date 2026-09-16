@@ -180,7 +180,7 @@ class Pipeline:
         if self.counts["conn"] % self.feature_every:
             return
 
-        row = features_for(f.src, list(flows), self.span)
+        row = features_for(f.src, list(flows), self.span, full=False)
         if not row:
             return
         for a in (self.scan.check(row),
@@ -222,7 +222,7 @@ class Pipeline:
             flows = list(self.window.window_for(src))
             if not flows:
                 continue
-            row = features_for(src, flows, self.span)
+            row = features_for(src, flows, self.span, full=False)
             if row:
                 a = self.scan.check(row)
                 if a:

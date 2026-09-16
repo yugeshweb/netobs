@@ -168,8 +168,33 @@ source IPs keeps per-source occupancy low and sits much higher up the curve.
 The Neris capture is the pathological case by construction: a single infected
 host running a horizontal scan reaches a per-source window of 15,630 flows.
 
-Fixing this means making `features_for()` incremental rather than recomputing
-over the whole window, which is a real piece of work and is not done.
+## 7a. First cut at the ceiling: stop computing what nothing reads
+
+The window feature pass was doing more work than the pipeline uses. In the
+pipeline the only consumer of `features_for()` is the port-scan detector, and
+it reads eight fields; the rest — the byte and duration aggregates, and
+`beacon_score()` with its per-destination sort — were being recomputed over the
+whole window every 25th connection and discarded. `features_for(full=False)`
+now computes only the eight, and the cost that scales with occupancy drops.
+
+Measured at the Neris operating point, capacity (median of several noisy runs
+on a shared machine):
+
+| occupancy | before | after |
+|---:|---:|---:|
+| ~3,600 (`--span 300`) | ~9,700 rec/s | ~14,300 rec/s |
+| ~7,500 (`--span 1800`, conn) | ~6,700 rec/s | ~10,700 rec/s |
+
+The gain is larger at higher occupancy, which is the point — the removed work
+was O(occupancy) per check, so this lifts the ceiling exactly where it was
+lowest, the busy-single-host case. Output is byte-identical: 225 alerts, 14
+incidents, and batch still equals replay alert-for-alert.
+
+This does not make the pass *incremental* — it is still O(occupancy) per check,
+just with a smaller constant. Maintaining running counters in the window so the
+eight features update in O(1) as flows enter and leave is the further step, and
+it is not done. The entropy terms would still cost O(distinct ports) to
+recompute, but that is far below O(occupancy) on a busy host.
 
 ## 7. Two measurement artifacts found on the way
 

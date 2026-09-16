@@ -58,16 +58,25 @@ def beacon_score(flows):
     }
 
 
-def features_for(src, flows, span):
-    """Build the full feature row for one source IP."""
+def features_for(src, flows, span, full=True):
+    """Build the feature row for one source IP.
+
+    In the pipeline the only consumer is the port-scan detector, and it reads
+    just eight of these fields. The rest -- the byte and duration aggregates,
+    and beacon_score() with its per-destination sort -- were being recomputed
+    over the whole window every feature_every connections and thrown away, the
+    dominant cost at high window occupancy (finding #12). `full=False` computes
+    only what the scan detector needs, which is byte-identical for it.
+
+    The full row is still produced by default, for the standalone feature dump
+    in extract.py.
+    """
     n = len(flows)
     if n == 0:
         return None
 
     dports = Counter(f.dport for f in flows)
     dsts = Counter(f.dst for f in flows)
-    obytes = sum(f.obytes for f in flows)
-    rbytes = sum(f.rbytes for f in flows)
     failed = sum(1 for f in flows if f.state in FAILED_STATES)
 
     row = {
@@ -78,15 +87,22 @@ def features_for(src, flows, span):
         "n_dst_ports": len(dports),
         "n_dst_hosts": len(dsts),
         "port_entropy": entropy(dports),
+        "failed_ratio": failed / n,
+        "small_flow_ratio": sum(1 for f in flows if f.opkts <= 2) / n,
+    }
+    if not full:
+        return row
+
+    obytes = sum(f.obytes for f in flows)
+    rbytes = sum(f.rbytes for f in flows)
+    row.update({
         "dst_entropy": entropy(dsts),
         "top_dst_share": dsts.most_common(1)[0][1] / n,
-        "failed_ratio": failed / n,
         "out_bytes": obytes,
         "in_bytes": rbytes,
         "out_in_ratio": obytes / rbytes if rbytes > 0 else (obytes if obytes else 0.0),
         "mean_duration": sum(f.duration for f in flows) / n,
         "mean_out_pkts": sum(f.opkts for f in flows) / n,
-        "small_flow_ratio": sum(1 for f in flows if f.opkts <= 2) / n,
-    }
+    })
     row.update(beacon_score(flows))
     return row
