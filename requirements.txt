@@ -1,0 +1,18 @@
+# NetObs runtime dependencies. Tested on Python 3.12.3.
+# Install into a venv:  python3 -m venv venv && . venv/bin/activate && pip install -r requirements.txt
+#
+# These cover the pipeline, the detectors, the DGA model, and the dashboard.
+# Zeek and the JA4 plugin are separate system installs (see the README) and are
+# only needed to turn a new pcap into logs -- the shipped alerts.db and the
+# dashboard run without them.
+
+scapy>=2.7.0
+pandas>=3.0.0
+numpy>=2.5.0
+scikit-learn>=1.9.0
+lightgbm>=4.7.0
+joblib>=1.6.0
+tqdm>=4.70.0
+fastapi>=0.141.0
+uvicorn[standard]>=0.53.0
+websockets>=17.1
