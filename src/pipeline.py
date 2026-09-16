@@ -202,6 +202,27 @@ class Pipeline:
         if a:
             self._emit(a)
 
+    def _final_sweep(self):
+        """Run the sampled window detectors once more, at end of stream.
+
+        Same checks as the periodic path in on_conn, but over every source
+        still in the window rather than only the one whose connection just
+        arrived. This is what lets a short capture (fewer connections than
+        feature_every) produce an alert at all.
+        """
+        for src in list(self.window.by_src):
+            flows = list(self.window.window_for(src))
+            if not flows:
+                continue
+            row = features_for(src, flows, self.span)
+            if row:
+                a = self.scan.check(row)
+                if a:
+                    self._emit(a)
+            a = self.exfil.check(src, flows, self.window.now)
+            if a:
+                self._emit(a)
+
     def run(self, lag=0.5, quiet_timeout=10.0):
         paths = {"conn": self.logdir / "conn.log",
                  "dns": self.logdir / "dns.log",
@@ -215,6 +236,15 @@ class Pipeline:
                 first_read = time.time()
             handlers[kind](rec)
             last_read = time.time()
+
+        # The window-feature detectors (scan, exfil) only run every
+        # feature_every-th connection, so a capture that ends mid-interval --
+        # or is shorter than the interval, like the 21-record exfil capture --
+        # would never have its final window evaluated at all. Sweep once at
+        # end of stream over every source still in the window. Cooldowns still
+        # apply, so anything already reported does not re-fire; this only
+        # recovers detections that the sampling gate would otherwise drop.
+        self._final_sweep()
 
         # Close only what genuinely went quiet; leave the rest open so the
         # dashboard can distinguish active incidents from resolved ones.
