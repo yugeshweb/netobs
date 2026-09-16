@@ -2,9 +2,8 @@
 
 Passive detection of cyber threats in one-directional IP traffic.
 
-Smart India Hackathon 2026, problem statement from NTRO. A critical-
-infrastructure operator mirrors gateway traffic into an isolated monitoring
-enclave through a one-way link (a data diode). The enclave sees everything
+A critical-infrastructure operator mirrors gateway traffic into an isolated
+monitoring enclave through a one-way link (a data diode). The enclave sees everything
 crossing the link but has no path back — it cannot probe, cannot complete a
 handshake, cannot push a mitigation. NetObs is the intelligence layer for that
 enclave: it ingests the passive stream, detects and scores threats in near real
@@ -33,7 +32,7 @@ thresholds it crossed; a DGA domain is a LightGBM classifier. See
 
 ## The constraints it respects
 
-These come from the problem statement and are non-negotiable:
+These are hard design constraints, not preferences:
 
 - **Read-only ingest, by construction.** The only input is a set of log files
   another process appends to. There is no code path that can contact, probe, or
@@ -154,5 +153,5 @@ Every detector's blind spot is written down, not hidden — an exfiltration over
 SCP evades the exfil detector, malware on an allowlisted TLS fingerprint passes
 the encrypted-session detector, C2 responses padded above 4 KB evade the beacon
 filter. The full list, per detector, is at the end of
-[docs/models.md](docs/models.md). A judge who asks how to evade the system
-should find the answer already written.
+[docs/models.md](docs/models.md) — the answer to "how would you evade this" is
+already written down rather than discovered later.
