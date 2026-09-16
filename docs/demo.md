@@ -1,18 +1,18 @@
 # Demo runbook
 
 A rehearsed script for showing NetObs live: the order to run things, the story
-for each finding, and honest answers to the questions a judge will ask. Every
+for each finding, and honest answers to the questions that come up. Every
 number here was measured on this machine; where a claim has a limit, the limit
 is stated so a hard question lands on an answer that is already written down.
 
 ## The one-line pitch
 
 A passive, read-only sensor for an air-gapped monitoring enclave that detects
-all six required threat classes from mirrored traffic alone — no probing, no
+all six threat classes from mirrored traffic alone — no probing, no
 decryption, no return path — and shows labelled, evidence-backed alerts on a
 live dashboard.
 
-## Setup (once, before the room)
+## Setup (once, before you demo)
 
 ```bash
 . venv/bin/activate
@@ -29,7 +29,7 @@ the three lab captures (`ddos`, `exfil`, `dnstunnel`).
 
 ## Six-class coverage — which capture shows which
 
-| PS | class | shown by | fires as |
+| # | class | shown by | fires as |
 |----|-------|----------|----------|
 | a | Volumetric DDoS | `ddos.pcap` | `syn_flood`, medium |
 | b | C2 beaconing | Neris | 5 beacons, 184.82.x.x |

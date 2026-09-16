@@ -1,9 +1,8 @@
 # Models, features, and validation
 
-This is the consolidated answer to the problem statement's documentation
-deliverable: for each of the six threat classes, what model or rule detects it,
-what features it works from, how it was trained and validated, and where it is
-blind. Each section links to the detailed document for that detector rather
+This document covers, for each of the six threat classes, what model or rule
+detects it, what features it works from, how it was trained and validated, and
+where it is blind. Each section links to the detailed document for that detector rather
 than repeating it; this file carries the headline and the pointer.
 
 ## The design principle
@@ -28,7 +27,7 @@ scored as 2011.
 
 ## At a glance
 
-| PS | threat class | detector | type | headline validation | detail |
+| # | threat class | detector | type | headline validation | detail |
 |----|--------------|----------|------|----------------------|--------|
 | a | Volumetric / protocol DDoS | `detectors/ddos.py` | rule | `syn_flood` on a real hping3 pcap; benign control silent | [ddos_validation.md](ddos_validation.md) |
 | b | C2 beaconing | `detectors/beaconing.py` | rule | 0 FP on 319 benign flows; 5 C2 in Neris | [beacon_validation.md](beacon_validation.md) |
@@ -52,8 +51,8 @@ for one attack.
 connections in states `S0, REJ, RSTOS0, SH, S1`), `small_flow_ratio`, the
 target's own rate against a rolling **median baseline** (median, not mean, so a
 single spike does not raise "normal"), and **source-IP entropy** normalised to a
-0–1 spread by dividing by `log2(n_sources)` — the problem statement's
-source-entropy signal, scaled so a flood from 10,000 addresses is not
+0–1 spread by dividing by `log2(n_sources)` — the source-entropy signal,
+scaled so a flood from 10,000 addresses is not
 automatically ranked above one from 100.
 
 **Two paths.** Volumetric fires on `incomplete_ratio ≥ 0.7` with no baseline —
