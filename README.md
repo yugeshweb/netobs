@@ -116,6 +116,8 @@ as it would a real sensor, so incidents appear progressively while you watch.
 
 - [docs/models.md](docs/models.md) — models, features, and validation, per
   detector. Start here.
+- [docs/demo.md](docs/demo.md) — how to run the live demo, the story behind
+  each finding, and answers to the common hard questions.
 - [docs/dga_operating_point.md](docs/dga_operating_point.md) — DGA threshold
   selection and per-family recall.
 - [docs/beacon_validation.md](docs/beacon_validation.md) — how benign and
