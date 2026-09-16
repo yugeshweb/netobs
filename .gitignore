@@ -4,3 +4,4 @@ data/processed/
 *.pcap
 *.log
 __pycache__/
+CLAUDE.md
