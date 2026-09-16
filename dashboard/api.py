@@ -12,6 +12,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from replay import REPLAY, list_captures
+
 ROOT = Path(__file__).resolve().parents[1]
 DB = ROOT / "data" / "alerts.db"
 
@@ -23,12 +25,20 @@ SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 
 def query(sql, args=()):
+    # A replay starts by deleting and recreating the database, so for a
+    # moment the file is missing or the tables are not there yet. Treat that
+    # as "nothing to report" rather than letting it 500 or kill the socket.
     if not DB.exists():
         return []
-    db = sqlite3.connect(str(DB))
+    try:
+        db = sqlite3.connect(str(DB))
+    except sqlite3.Error:
+        return []
     db.row_factory = sqlite3.Row
     try:
         return [dict(r) for r in db.execute(sql, args).fetchall()]
+    except sqlite3.Error:
+        return []
     finally:
         db.close()
 
@@ -126,7 +136,7 @@ async def ws(sock: WebSocket):
         while True:
             rows = query("SELECT MAX(id) m FROM alerts")
             newest = (rows[0]["m"] or 0) if rows else 0
-            if newest > last_alert_id:
+            if newest != last_alert_id:
                 last_alert_id = newest
                 await sock.send_json({
                     "type": "update",
@@ -136,6 +146,27 @@ async def ws(sock: WebSocket):
             await asyncio.sleep(1.0)
     except (WebSocketDisconnect, RuntimeError):
         return
+
+
+@app.get("/api/captures")
+def captures():
+    return list_captures()
+
+
+@app.get("/api/replay/status")
+def replay_status():
+    return REPLAY.status()
+
+
+@app.post("/api/replay/start")
+def replay_start(pcap: str, speed: float = 60.0):
+    return REPLAY.start(pcap, speed)
+
+
+@app.post("/api/replay/stop")
+def replay_stop():
+    REPLAY.stop()
+    return REPLAY.status()
 
 
 @app.get("/")
