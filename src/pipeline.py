@@ -163,8 +163,16 @@ class Pipeline:
             if a:
                 self._emit(a)
 
+        # Check the beaconing track this flow belongs to on every connection,
+        # not every 50th. A beacon is only detectable while it has >= 8 recent
+        # contacts inside the window -- a transient condition -- so sampling
+        # missed 4 of the 5 C2 destinations in Neris, catching only whichever
+        # track happened to be current at a %50 tick. The check is cheap (gap
+        # CV over one track's contacts, not a whole-window feature pass) and
+        # the detector's own 600 s cooldown stops it re-firing, so there is no
+        # throughput reason to gate it.
         bkey = self.beacon.add(f)
-        if bkey is not None and self.counts["conn"] % 50 == 0:
+        if bkey is not None:
             a = self.beacon.check(bkey)
             if a:
                 self._emit(a)

@@ -67,7 +67,7 @@ live traffic.
 ## Quickstart
 
 The repository ships with a trained DGA model and an `alerts.db` already
-populated from the CTU-13 Neris capture (221 alerts, 10 incidents), so the
+populated from the CTU-13 Neris capture (225 alerts, 14 incidents), so the
 dashboard shows real detections with no capture or Zeek setup required.
 
 ```bash
@@ -77,7 +77,7 @@ pip install -r requirements.txt
 cd dashboard && uvicorn api:app --port 8000    # do not use --reload
 ```
 
-Open <http://localhost:8000>. You are looking at the ten incidents found in the
+Open <http://localhost:8000>. You are looking at the fourteen incidents found in the
 Neris botnet capture — a horizontal port scan, C2 beaconing, DGA domains, and
 suspicious TLS — each with its confidence, severity, and the evidence behind it.
 

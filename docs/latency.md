@@ -55,6 +55,12 @@ Both runs are the Neris capture at 60×, all three logs, on an i9-13900HX with
 7.8 GB under WSL2. Same capture, same speed, same machine, 221 alerts each
 time, all 221 matched to a fed record.
 
+These runs predate the beaconing sampling fix, which later raised the Neris
+baseline to 225 alerts (four more C2-beacon alerts on the same conn path). The
+figures below are reported as measured, at 221 alerts; the four extra alerts
+were not part of this run, and the merge-fix conclusion this section is about —
+p99 from 57 s to under a second — is what it measures.
+
 |  | before | after |
 |---|---|---|
 | min | 0.055 s | 0.001 s |
